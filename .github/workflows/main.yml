@@ -40,90 +40,96 @@ jobs:
 
           mkdir -p "$(dirname "$TOOLCHAIN")"
 
-          echo "GCC directory:"
-          echo "$TOOLCHAIN"
-
-      - name: Clone Android GCC 4.9
+      - name: Clone preserved GCC 4.9
         run: |
           TOOLCHAIN="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"
 
           git clone \
             --depth=1 \
-            https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 \
+            --branch android11-release \
+            https://gitlab.com/pixelrom/kernel/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9.git \
             "$TOOLCHAIN"
 
-      - name: Verify GCC installation
+      - name: Verify GCC
         run: |
           TOOLCHAIN="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"
 
-          echo "===== GCC directory ====="
-          ls -la "$TOOLCHAIN"
+          echo "===== GCC root ====="
+          ls -lah "$TOOLCHAIN"
 
           echo ""
-          echo "===== GCC bin directory ====="
-          ls -la "$TOOLCHAIN/bin"
-
-          echo ""
-          echo "===== GCC compiler ====="
+          echo "===== GCC bin ====="
+          ls -lah "$TOOLCHAIN/bin"
 
           GCC="$TOOLCHAIN/bin/aarch64-linux-android-gcc"
 
           if [ ! -f "$GCC" ]; then
-            echo "ERROR: GCC compiler was not found:"
+            echo "ERROR: GCC compiler not found:"
             echo "$GCC"
             echo ""
-            echo "Searching for aarch64-linux-android-gcc..."
-            find "$TOOLCHAIN" -name "aarch64-linux-android-gcc" -type f -print
+            echo "Searching:"
+            find "$TOOLCHAIN" \
+              -type f \
+              -name "aarch64-linux-android-gcc" \
+              -print
             exit 1
           fi
 
           chmod +x "$GCC"
 
+          echo ""
+          echo "===== GCC version ====="
           "$GCC" --version
 
       - name: Check kernel source
         run: |
-          echo "===== Kernel source ====="
-          pwd
-
-          echo ""
           echo "===== Defconfig ====="
 
           if [ ! -f "arch/arm64/configs/a70q_eur_open_defconfig" ]; then
-            echo "ERROR: a70q_eur_open_defconfig was not found."
+            echo "ERROR: a70q_eur_open_defconfig not found."
 
             echo ""
-            echo "Available A70Q configs:"
-            find arch/arm64/configs -type f \
-              \( -iname "*a70*" -o -iname "*q*" \) \
+            echo "Available configs:"
+            find arch/arm64/configs \
+              -maxdepth 1 \
+              -type f \
               | sort
 
             exit 1
           fi
 
-          echo "Found:"
-          echo "arch/arm64/configs/a70q_eur_open_defconfig"
+          echo "Found a70q_eur_open_defconfig"
 
-      - name: Check Clang
+      - name: Check Clang 10
         run: |
           CLANG="$GITHUB_WORKSPACE/toolchain/llvm-arm-toolchain-ship/10.0/bin/clang"
 
           if [ ! -f "$CLANG" ]; then
-            echo "ERROR: Clang 10 was not found:"
+            echo "ERROR: Clang 10 not found:"
             echo "$CLANG"
             exit 1
           fi
 
           chmod +x "$CLANG"
 
+          echo "===== Clang ====="
           "$CLANG" --version
 
-      - name: Prepare build directory
+      - name: Check DTC
+        run: |
+          if [ ! -e "$GITHUB_WORKSPACE/tools/dtc" ]; then
+            echo "ERROR: tools/dtc not found."
+            exit 1
+          fi
+
+          echo "DTC found."
+
+      - name: Prepare output
         run: |
           rm -rf out
           mkdir -p out
 
-      - name: Generate kernel configuration
+      - name: Generate defconfig
         run: |
           TOOLCHAIN="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"
 
@@ -141,7 +147,7 @@ jobs:
             CLANG_TRIPLE=aarch64-linux-gnu- \
             a70q_eur_open_defconfig
 
-      - name: Disable forced module verification
+      - name: Configure kernel
         run: |
           CONFIG="$GITHUB_WORKSPACE/out/.config"
 
@@ -158,13 +164,11 @@ jobs:
           sed -i '/^# CONFIG_SAMSUNG_TIMA is not set$/d' "$CONFIG"
           echo "# CONFIG_SAMSUNG_TIMA is not set" >> "$CONFIG"
 
-          if ! grep -q '^CONFIG_MODULES=y' "$CONFIG"; then
-            echo "CONFIG_MODULES=y" >> "$CONFIG"
-          fi
+          sed -i '/^CONFIG_MODULES=/d' "$CONFIG"
+          echo "CONFIG_MODULES=y" >> "$CONFIG"
 
-          if ! grep -q '^CONFIG_MODULE_UNLOAD=y' "$CONFIG"; then
-            echo "CONFIG_MODULE_UNLOAD=y" >> "$CONFIG"
-          fi
+          sed -i '/^CONFIG_MODULE_UNLOAD=/d' "$CONFIG"
+          echo "CONFIG_MODULE_UNLOAD=y" >> "$CONFIG"
 
           make -C "$GITHUB_WORKSPACE" \
             O="$GITHUB_WORKSPACE/out" \
@@ -172,7 +176,7 @@ jobs:
             olddefconfig
 
           echo ""
-          echo "===== Final configuration ====="
+          echo "===== Final config ====="
 
           grep -E \
             'CONFIG_MODULES=|CONFIG_MODULE_UNLOAD=|CONFIG_MODULE_SIG_FORCE=|CONFIG_SAMSUNG_TIMA=' \
@@ -196,28 +200,27 @@ jobs:
             REAL_CC="$CLANG" \
             CLANG_TRIPLE=aarch64-linux-gnu-
 
-      - name: Verify kernel image
+      - name: Verify Image
         run: |
           IMAGE="$GITHUB_WORKSPACE/out/arch/arm64/boot/Image"
 
           if [ ! -f "$IMAGE" ]; then
-            echo "ERROR: Kernel Image was not produced."
+            echo "ERROR: Image was not built."
 
             echo ""
-            echo "Contents of out/arch/arm64/boot:"
+            echo "Boot directory:"
             ls -lah "$GITHUB_WORKSPACE/out/arch/arm64/boot" || true
 
             exit 1
           fi
 
-          echo "===== Kernel ====="
+          echo "===== Kernel Image ====="
           ls -lh "$IMAGE"
 
           echo ""
-          echo "===== File information ====="
           file "$IMAGE"
 
-      - name: Copy kernel Image
+      - name: Copy Image
         run: |
           cp \
             "$GITHUB_WORKSPACE/out/arch/arm64/boot/Image" \
