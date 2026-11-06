@@ -1,0 +1,71 @@
+name: A70Q Cartel Kernel Build
+
+on:
+  push:
+    branches:
+      - lineage-22.1
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc bison flex build-essential \
+            libssl-dev libelf-dev \
+            libncurses5-dev \
+            python3 ccache git
+
+      - name: Check kernel version
+        run: |
+          echo "Kernel version:"
+          make kernelversion
+
+      - name: Disable forced module signature verification
+        run: |
+          echo "Disabling CONFIG_MODULE_SIG_FORCE..."
+
+          if [ -f arch/arm64/configs/a70q_defconfig ]; then
+            CONFIG=arch/arm64/configs/a70q_defconfig
+          elif [ -f arch/arm64/configs/a70q_defconfig ]; then
+            CONFIG=arch/arm64/configs/a70q_defconfig
+          else
+            echo "A70Q defconfig not found"
+            find arch/arm64/configs -iname '*a70*' -o -iname '*sm6150*'
+            exit 1
+          fi
+
+          sed -i '/CONFIG_MODULE_SIG_FORCE=/d' "$CONFIG"
+          echo '# CONFIG_MODULE_SIG_FORCE is not set' >> "$CONFIG"
+
+      - name: Build kernel
+        run: |
+          chmod +x build_kernel.sh
+          ./build_kernel.sh
+
+      - name: Check build output
+        run: |
+          echo "Searching for kernel image..."
+          find . -type f \( \
+            -name "Image" -o \
+            -name "Image.gz" -o \
+            -name "Image.gz-dtb" \
+          \) -print
+
+      - name: Upload kernel
+        uses: actions/upload-artifact@v4
+        with:
+          name: A70Q-Cartel-kernel
+          path: |
+            arch/arm64/boot/Image*
+            AnyKernel3/**
+          if-no-files-found: warn
