@@ -16,54 +16,73 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Install dependencies
+      - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            bc bison flex build-essential \
-            libssl-dev libelf-dev \
+            bc \
+            bison \
+            flex \
+            build-essential \
+            libssl-dev \
+            libelf-dev \
             libncurses5-dev \
-            python3 git curl ccache
+            python3 \
+            git \
+            curl \
+            ccache
 
-      - name: Get Android GCC 4.9
+      - name: Download Android GCC 4.9
         run: |
           mkdir -p "$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64"
 
           git clone --depth=1 \
-            https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64 \
-            "$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64"
+            https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 \
+            "$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"
 
-      - name: Check source
+      - name: Check GCC toolchain
         run: |
-          echo "Checking defconfig..."
+          GCC="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin"
+
+          test -x "$GCC/aarch64-linux-android-gcc"
+          test -x "$GCC/aarch64-linux-android-ld"
+
+          "$GCC/aarch64-linux-android-gcc" --version
+          "$GCC/aarch64-linux-android-ld" --version
+
+      - name: Check Cartel source
+        run: |
           test -f arch/arm64/configs/a70q_eur_open_defconfig
-
-          echo "Checking Clang..."
           test -x toolchain/llvm-arm-toolchain-ship/10.0/bin/clang
-
-          echo "Checking DTC..."
           test -e tools/dtc
 
-          echo "Source checks passed."
+          echo "A70Q defconfig found"
+          echo "Clang found"
+          echo "DTC found"
 
-      - name: Configure Cartel
+      - name: Prepare output
         run: |
           rm -rf out
           mkdir -p out
+
+      - name: Configure kernel
+        run: |
+          GCC="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin/aarch64-linux-android-"
+          CLANG="$GITHUB_WORKSPACE/toolchain/llvm-arm-toolchain-ship/10.0/bin/clang"
 
           make -C "$GITHUB_WORKSPACE" \
             O="$GITHUB_WORKSPACE/out" \
             DTC_EXT="$GITHUB_WORKSPACE/tools/dtc" \
             CONFIG_BUILD_ARM64_DT_OVERLAY=y \
             ARCH=arm64 \
-            CROSS_COMPILE="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin/aarch64-linux-android-" \
-            REAL_CC="$GITHUB_WORKSPACE/toolchain/llvm-arm-toolchain-ship/10.0/bin/clang" \
+            CROSS_COMPILE="$GCC" \
+            REAL_CC="$CLANG" \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             a70q_eur_open_defconfig
 
-      - name: Apply requested kernel config
+      - name: Apply kernel configuration
         run: |
-          scripts/config --file out/.config \
+          ./scripts/config --file out/.config \
             --enable MODULES \
             --enable MODULE_UNLOAD \
             --disable MODULE_SIG_FORCE \
@@ -74,36 +93,50 @@ jobs:
             ARCH=arm64 \
             olddefconfig
 
-          echo "Relevant configuration:"
+          echo ""
+          echo "===== Kernel configuration ====="
           grep -E \
             'CONFIG_MODULES=|CONFIG_MODULE_UNLOAD=|CONFIG_MODULE_SIG_FORCE=|CONFIG_SAMSUNG_TIMA=' \
             out/.config || true
+          echo "================================"
 
       - name: Build kernel
         run: |
+          GCC="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin/aarch64-linux-android-"
+          CLANG="$GITHUB_WORKSPACE/toolchain/llvm-arm-toolchain-ship/10.0/bin/clang"
+
           make -j"$(nproc)" \
             -C "$GITHUB_WORKSPACE" \
             O="$GITHUB_WORKSPACE/out" \
             DTC_EXT="$GITHUB_WORKSPACE/tools/dtc" \
             CONFIG_BUILD_ARM64_DT_OVERLAY=y \
             ARCH=arm64 \
-            CROSS_COMPILE="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin/aarch64-linux-android-" \
-            REAL_CC="$GITHUB_WORKSPACE/toolchain/llvm-arm-toolchain-ship/10.0/bin/clang" \
+            CROSS_COMPILE="$GCC" \
+            REAL_CC="$CLANG" \
             CLANG_TRIPLE=aarch64-linux-gnu-
 
       - name: Verify kernel
         run: |
-          test -f out/arch/arm64/boot/Image
+          echo "===== Kernel version ====="
+          make -C "$GITHUB_WORKSPACE" \
+            O="$GITHUB_WORKSPACE/out" \
+            kernelversion
+
+          echo ""
+          echo "===== Kernel image ====="
+          ls -lh out/arch/arm64/boot/Image
+
           file out/arch/arm64/boot/Image
-          echo "Kernel version:"
-          make -C "$GITHUB_WORKSPACE" O="$GITHUB_WORKSPACE/out" kernelversion
 
-      - name: Copy Image
+      - name: Copy kernel Image
         run: |
-          cp out/arch/arm64/boot/Image arch/arm64/boot/Image
+          cp out/arch/arm64/boot/Image \
+             arch/arm64/boot/Image
 
-      - name: Upload Image
+      - name: Upload kernel artifact
         uses: actions/upload-artifact@v4
         with:
-          name: A70Q-Cartel-Image
-          path: arch/arm64/boot/Image
+          name: A70Q-Cartel-Kernel
+          path: |
+            arch/arm64/boot/Image
+            out/.config
