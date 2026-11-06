@@ -1,0 +1,26 @@
+      - name: Inspect A70Q kernel outputs
+        run: |
+          echo "===== ARM64 boot outputs ====="
+
+          find out/arch/arm64/boot \
+            -maxdepth 3 \
+            -type f \
+            -printf '%p (%s bytes)\n' \
+            | sort
+
+          echo ""
+          echo "===== DTB / DTBO outputs ====="
+
+          find out \
+            -type f \
+            \( -iname "*dtb*" -o -iname "*dtbo*" \) \
+            -printf '%p (%s bytes)\n' \
+            | sort
+
+          echo ""
+          echo "===== Kernel image types ====="
+
+          find out/arch/arm64/boot \
+            -maxdepth 1 \
+            -type f \
+            -exec file {} \;
