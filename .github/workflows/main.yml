@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout source
+      - name: Checkout Cartel source
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
@@ -23,49 +23,87 @@ jobs:
             bc bison flex build-essential \
             libssl-dev libelf-dev \
             libncurses5-dev \
-            python3 ccache git
+            python3 git curl ccache
 
-      - name: Check kernel version
+      - name: Get Android GCC 4.9
         run: |
-          echo "Kernel version:"
-          make kernelversion
+          mkdir -p "$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64"
 
-      - name: Disable forced module signature verification
+          git clone --depth=1 \
+            https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64 \
+            "$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64"
+
+      - name: Check source
         run: |
-          echo "Disabling CONFIG_MODULE_SIG_FORCE..."
+          echo "Checking defconfig..."
+          test -f arch/arm64/configs/a70q_eur_open_defconfig
 
-          if [ -f arch/arm64/configs/a70q_defconfig ]; then
-            CONFIG=arch/arm64/configs/a70q_defconfig
-          elif [ -f arch/arm64/configs/a70q_defconfig ]; then
-            CONFIG=arch/arm64/configs/a70q_defconfig
-          else
-            echo "A70Q defconfig not found"
-            find arch/arm64/configs -iname '*a70*' -o -iname '*sm6150*'
-            exit 1
-          fi
+          echo "Checking Clang..."
+          test -x toolchain/llvm-arm-toolchain-ship/10.0/bin/clang
 
-          sed -i '/CONFIG_MODULE_SIG_FORCE=/d' "$CONFIG"
-          echo '# CONFIG_MODULE_SIG_FORCE is not set' >> "$CONFIG"
+          echo "Checking DTC..."
+          test -e tools/dtc
+
+          echo "Source checks passed."
+
+      - name: Configure Cartel
+        run: |
+          rm -rf out
+          mkdir -p out
+
+          make -C "$GITHUB_WORKSPACE" \
+            O="$GITHUB_WORKSPACE/out" \
+            DTC_EXT="$GITHUB_WORKSPACE/tools/dtc" \
+            CONFIG_BUILD_ARM64_DT_OVERLAY=y \
+            ARCH=arm64 \
+            CROSS_COMPILE="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin/aarch64-linux-android-" \
+            REAL_CC="$GITHUB_WORKSPACE/toolchain/llvm-arm-toolchain-ship/10.0/bin/clang" \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            a70q_eur_open_defconfig
+
+      - name: Apply requested kernel config
+        run: |
+          scripts/config --file out/.config \
+            --enable MODULES \
+            --enable MODULE_UNLOAD \
+            --disable MODULE_SIG_FORCE \
+            --disable SAMSUNG_TIMA
+
+          make -C "$GITHUB_WORKSPACE" \
+            O="$GITHUB_WORKSPACE/out" \
+            ARCH=arm64 \
+            olddefconfig
+
+          echo "Relevant configuration:"
+          grep -E \
+            'CONFIG_MODULES=|CONFIG_MODULE_UNLOAD=|CONFIG_MODULE_SIG_FORCE=|CONFIG_SAMSUNG_TIMA=' \
+            out/.config || true
 
       - name: Build kernel
         run: |
-          chmod +x build_kernel.sh
-          ./build_kernel.sh
+          make -j"$(nproc)" \
+            -C "$GITHUB_WORKSPACE" \
+            O="$GITHUB_WORKSPACE/out" \
+            DTC_EXT="$GITHUB_WORKSPACE/tools/dtc" \
+            CONFIG_BUILD_ARM64_DT_OVERLAY=y \
+            ARCH=arm64 \
+            CROSS_COMPILE="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin/aarch64-linux-android-" \
+            REAL_CC="$GITHUB_WORKSPACE/toolchain/llvm-arm-toolchain-ship/10.0/bin/clang" \
+            CLANG_TRIPLE=aarch64-linux-gnu-
 
-      - name: Check build output
+      - name: Verify kernel
         run: |
-          echo "Searching for kernel image..."
-          find . -type f \( \
-            -name "Image" -o \
-            -name "Image.gz" -o \
-            -name "Image.gz-dtb" \
-          \) -print
+          test -f out/arch/arm64/boot/Image
+          file out/arch/arm64/boot/Image
+          echo "Kernel version:"
+          make -C "$GITHUB_WORKSPACE" O="$GITHUB_WORKSPACE/out" kernelversion
 
-      - name: Upload kernel
+      - name: Copy Image
+        run: |
+          cp out/arch/arm64/boot/Image arch/arm64/boot/Image
+
+      - name: Upload Image
         uses: actions/upload-artifact@v4
         with:
-          name: A70Q-Cartel-kernel
-          path: |
-            arch/arm64/boot/Image*
-            AnyKernel3/**
-          if-no-files-found: warn
+          name: A70Q-Cartel-Image
+          path: arch/arm64/boot/Image
