@@ -82,11 +82,9 @@ jobs:
           echo "===== ARM32 GCC ====="
 
           which arm-linux-gnueabi-gcc
-
           arm-linux-gnueabi-gcc --version
 
           which arm-linux-gnueabi-ld
-
           arm-linux-gnueabi-ld --version
 
       - name: Download Proton Clang
@@ -104,14 +102,25 @@ jobs:
 
           if [ ! -x "$PROTON/bin/clang" ]; then
             echo "ERROR: Proton Clang was not found."
-
             ls -lah "$PROTON"
-
             exit 1
           fi
 
           echo "===== Proton Clang ====="
           "$PROTON/bin/clang" --version
+
+          echo ""
+          echo "===== Test -fstack-protector-strong ====="
+
+          echo 'int main(void) { return 0; }' > /tmp/test.c
+
+          "$PROTON/bin/clang" \
+            -target aarch64-linux-android \
+            -fstack-protector-strong \
+            -c /tmp/test.c \
+            -o /tmp/test.o
+
+          echo "Clang accepts -fstack-protector-strong"
 
       - name: Check A70Q defconfig
         run: |
@@ -152,7 +161,6 @@ jobs:
 
           GCC="$TOOLCHAIN/bin/aarch64-linux-android-"
 
-          # ARM32 compatibility compiler
           COMPAT="$(dirname "$(which arm-linux-gnueabi-gcc)")/arm-linux-gnueabi-"
 
           PROTON="$GITHUB_WORKSPACE/proton-clang"
@@ -163,13 +171,14 @@ jobs:
 
           make -C "$GITHUB_WORKSPACE" \
             O="$GITHUB_WORKSPACE/out" \
-            DTC_EXT="$GITHUB_WORKSPACE/tools/dtc" \
-            CONFIG_BUILD_ARM64_DT_OVERLAY=y \
             ARCH=arm64 \
             CROSS_COMPILE="$GCC" \
             CROSS_COMPILE_COMPAT="$COMPAT" \
+            CC="$PROTON/bin/clang" \
             REAL_CC="$PROTON/bin/clang" \
             CLANG_TRIPLE=aarch64-linux-gnu- \
+            DTC_EXT="$GITHUB_WORKSPACE/tools/dtc" \
+            CONFIG_BUILD_ARM64_DT_OVERLAY=y \
             a70q_defconfig
 
       - name: Configure kernel
@@ -202,13 +211,18 @@ jobs:
           make -C "$GITHUB_WORKSPACE" \
             O="$GITHUB_WORKSPACE/out" \
             ARCH=arm64 \
+            CROSS_COMPILE="$GCC" \
+            CROSS_COMPILE_COMPAT="$COMPAT" \
+            CC="$PROTON/bin/clang" \
+            REAL_CC="$PROTON/bin/clang" \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
             olddefconfig
 
           echo ""
           echo "===== Final kernel configuration ====="
 
           grep -E \
-            'CONFIG_MODULES=|CONFIG_MODULE_UNLOAD=|CONFIG_MODULE_SIG_FORCE=|CONFIG_SAMSUNG_TIMA=' \
+            'CONFIG_MODULES=|CONFIG_MODULE_UNLOAD=|CONFIG_MODULE_SIG_FORCE=|CONFIG_SAMSUNG_TIMA=|CONFIG_CC_STACKPROTECTOR_' \
             "$CONFIG" || true
 
       - name: Build kernel
@@ -224,19 +238,21 @@ jobs:
           echo "===== Build variables ====="
           echo "CROSS_COMPILE=$GCC"
           echo "CROSS_COMPILE_COMPAT=$COMPAT"
+          echo "CC=$PROTON/bin/clang"
           echo "REAL_CC=$PROTON/bin/clang"
           echo "CLANG_TRIPLE=aarch64-linux-gnu-"
 
           make -j"$(nproc)" \
             -C "$GITHUB_WORKSPACE" \
             O="$GITHUB_WORKSPACE/out" \
-            DTC_EXT="$GITHUB_WORKSPACE/tools/dtc" \
-            CONFIG_BUILD_ARM64_DT_OVERLAY=y \
             ARCH=arm64 \
             CROSS_COMPILE="$GCC" \
             CROSS_COMPILE_COMPAT="$COMPAT" \
+            CC="$PROTON/bin/clang" \
             REAL_CC="$PROTON/bin/clang" \
-            CLANG_TRIPLE=aarch64-linux-gnu-
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            DTC_EXT="$GITHUB_WORKSPACE/tools/dtc" \
+            CONFIG_BUILD_ARM64_DT_OVERLAY=y
 
       - name: Verify kernel Image
         run: |
