@@ -19,6 +19,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
+
           sudo apt-get install -y \
             bc \
             bison \
@@ -32,13 +33,16 @@ jobs:
             curl \
             wget \
             xz-utils \
-            ccache
+            ccache \
+            gcc-arm-linux-gnueabi \
+            binutils-arm-linux-gnueabi
 
-      - name: Prepare GCC 4.9
+      - name: Prepare GCC 4.9 directory
         run: |
           TOOLCHAIN="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"
 
           rm -rf "$TOOLCHAIN"
+
           mkdir -p "$(dirname "$TOOLCHAIN")"
 
       - name: Download GCC 4.9
@@ -51,22 +55,39 @@ jobs:
             https://gitlab.com/pixelrom/kernel/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9.git \
             "$TOOLCHAIN"
 
-      - name: Verify GCC
+      - name: Verify AArch64 GCC
         run: |
           TOOLCHAIN="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"
 
           GCC="$TOOLCHAIN/bin/aarch64-linux-android-gcc"
 
           if [ ! -f "$GCC" ]; then
-            echo "ERROR: GCC 4.9 not found."
-            find "$TOOLCHAIN" -name "aarch64-linux-android-gcc" -type f -print
+            echo "ERROR: AArch64 GCC was not found."
+
+            find "$TOOLCHAIN" \
+              -name "aarch64-linux-android-gcc" \
+              -type f \
+              -print
+
             exit 1
           fi
 
           chmod +x "$GCC"
 
-          echo "===== GCC ====="
+          echo "===== AArch64 GCC ====="
           "$GCC" --version
+
+      - name: Verify ARM32 compatibility compiler
+        run: |
+          echo "===== ARM32 GCC ====="
+
+          which arm-linux-gnueabi-gcc
+
+          arm-linux-gnueabi-gcc --version
+
+          which arm-linux-gnueabi-ld
+
+          arm-linux-gnueabi-ld --version
 
       - name: Download Proton Clang
         run: |
@@ -83,7 +104,9 @@ jobs:
 
           if [ ! -x "$PROTON/bin/clang" ]; then
             echo "ERROR: Proton Clang was not found."
+
             ls -lah "$PROTON"
+
             exit 1
           fi
 
@@ -97,6 +120,7 @@ jobs:
 
             echo ""
             echo "Available A70 configs:"
+
             find arch/arm64/configs \
               -maxdepth 1 \
               -type f \
@@ -128,7 +152,14 @@ jobs:
 
           GCC="$TOOLCHAIN/bin/aarch64-linux-android-"
 
+          # ARM32 compatibility compiler
+          COMPAT="$(dirname "$(which arm-linux-gnueabi-gcc)")/arm-linux-gnueabi-"
+
           PROTON="$GITHUB_WORKSPACE/proton-clang"
+
+          echo "AArch64 CROSS_COMPILE=$GCC"
+          echo "ARM32 CROSS_COMPILE_COMPAT=$COMPAT"
+          echo "Clang=$PROTON/bin/clang"
 
           make -C "$GITHUB_WORKSPACE" \
             O="$GITHUB_WORKSPACE/out" \
@@ -136,6 +167,7 @@ jobs:
             CONFIG_BUILD_ARM64_DT_OVERLAY=y \
             ARCH=arm64 \
             CROSS_COMPILE="$GCC" \
+            CROSS_COMPILE_COMPAT="$COMPAT" \
             REAL_CC="$PROTON/bin/clang" \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             a70q_defconfig
@@ -185,7 +217,15 @@ jobs:
 
           GCC="$TOOLCHAIN/bin/aarch64-linux-android-"
 
+          COMPAT="$(dirname "$(which arm-linux-gnueabi-gcc)")/arm-linux-gnueabi-"
+
           PROTON="$GITHUB_WORKSPACE/proton-clang"
+
+          echo "===== Build variables ====="
+          echo "CROSS_COMPILE=$GCC"
+          echo "CROSS_COMPILE_COMPAT=$COMPAT"
+          echo "REAL_CC=$PROTON/bin/clang"
+          echo "CLANG_TRIPLE=aarch64-linux-gnu-"
 
           make -j"$(nproc)" \
             -C "$GITHUB_WORKSPACE" \
@@ -194,6 +234,7 @@ jobs:
             CONFIG_BUILD_ARM64_DT_OVERLAY=y \
             ARCH=arm64 \
             CROSS_COMPILE="$GCC" \
+            CROSS_COMPILE_COMPAT="$COMPAT" \
             REAL_CC="$PROTON/bin/clang" \
             CLANG_TRIPLE=aarch64-linux-gnu-
 
@@ -206,7 +247,10 @@ jobs:
 
             echo ""
             echo "Boot directory:"
-            ls -lah "$GITHUB_WORKSPACE/out/arch/arm64/boot" || true
+
+            ls -lah \
+              "$GITHUB_WORKSPACE/out/arch/arm64/boot" \
+              || true
 
             exit 1
           fi
