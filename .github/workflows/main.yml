@@ -37,7 +37,6 @@ jobs:
           TOOLCHAIN="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"
 
           rm -rf "$TOOLCHAIN"
-
           mkdir -p "$(dirname "$TOOLCHAIN")"
 
       - name: Clone preserved GCC 4.9
@@ -66,12 +65,14 @@ jobs:
           if [ ! -f "$GCC" ]; then
             echo "ERROR: GCC compiler not found:"
             echo "$GCC"
+
             echo ""
-            echo "Searching:"
+            echo "Searching for compiler:"
             find "$TOOLCHAIN" \
               -type f \
               -name "aarch64-linux-android-gcc" \
               -print
+
             exit 1
           fi
 
@@ -83,22 +84,24 @@ jobs:
 
       - name: Check kernel source
         run: |
-          echo "===== Defconfig ====="
+          echo "===== A70Q defconfig ====="
 
-          if [ ! -f "arch/arm64/configs/a70q_eur_open_defconfig" ]; then
-            echo "ERROR: a70q_eur_open_defconfig not found."
+          if [ ! -f "arch/arm64/configs/a70q_defconfig" ]; then
+            echo "ERROR: a70q_defconfig not found."
 
             echo ""
-            echo "Available configs:"
+            echo "Available A70 configs:"
             find arch/arm64/configs \
               -maxdepth 1 \
               -type f \
+              -iname "*a70*" \
               | sort
 
             exit 1
           fi
 
-          echo "Found a70q_eur_open_defconfig"
+          echo "Found:"
+          echo "arch/arm64/configs/a70q_defconfig"
 
       - name: Check Clang 10
         run: |
@@ -129,107 +132,6 @@ jobs:
           rm -rf out
           mkdir -p out
 
-      - name: Generate defconfig
+      - name: Generate A70Q defconfig
         run: |
           TOOLCHAIN="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"
-
-          GCC="$TOOLCHAIN/bin/aarch64-linux-android-"
-
-          CLANG="$GITHUB_WORKSPACE/toolchain/llvm-arm-toolchain-ship/10.0/bin/clang"
-
-          make -C "$GITHUB_WORKSPACE" \
-            O="$GITHUB_WORKSPACE/out" \
-            DTC_EXT="$GITHUB_WORKSPACE/tools/dtc" \
-            CONFIG_BUILD_ARM64_DT_OVERLAY=y \
-            ARCH=arm64 \
-            CROSS_COMPILE="$GCC" \
-            REAL_CC="$CLANG" \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
-            a70q_eur_open_defconfig
-
-      - name: Configure kernel
-        run: |
-          CONFIG="$GITHUB_WORKSPACE/out/.config"
-
-          if [ ! -f "$CONFIG" ]; then
-            echo "ERROR: out/.config was not generated."
-            exit 1
-          fi
-
-          sed -i '/^CONFIG_MODULE_SIG_FORCE=/d' "$CONFIG"
-          sed -i '/^# CONFIG_MODULE_SIG_FORCE is not set$/d' "$CONFIG"
-          echo "# CONFIG_MODULE_SIG_FORCE is not set" >> "$CONFIG"
-
-          sed -i '/^CONFIG_SAMSUNG_TIMA=/d' "$CONFIG"
-          sed -i '/^# CONFIG_SAMSUNG_TIMA is not set$/d' "$CONFIG"
-          echo "# CONFIG_SAMSUNG_TIMA is not set" >> "$CONFIG"
-
-          sed -i '/^CONFIG_MODULES=/d' "$CONFIG"
-          echo "CONFIG_MODULES=y" >> "$CONFIG"
-
-          sed -i '/^CONFIG_MODULE_UNLOAD=/d' "$CONFIG"
-          echo "CONFIG_MODULE_UNLOAD=y" >> "$CONFIG"
-
-          make -C "$GITHUB_WORKSPACE" \
-            O="$GITHUB_WORKSPACE/out" \
-            ARCH=arm64 \
-            olddefconfig
-
-          echo ""
-          echo "===== Final config ====="
-
-          grep -E \
-            'CONFIG_MODULES=|CONFIG_MODULE_UNLOAD=|CONFIG_MODULE_SIG_FORCE=|CONFIG_SAMSUNG_TIMA=' \
-            "$CONFIG" || true
-
-      - name: Build kernel
-        run: |
-          TOOLCHAIN="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"
-
-          GCC="$TOOLCHAIN/bin/aarch64-linux-android-"
-
-          CLANG="$GITHUB_WORKSPACE/toolchain/llvm-arm-toolchain-ship/10.0/bin/clang"
-
-          make -j"$(nproc)" \
-            -C "$GITHUB_WORKSPACE" \
-            O="$GITHUB_WORKSPACE/out" \
-            DTC_EXT="$GITHUB_WORKSPACE/tools/dtc" \
-            CONFIG_BUILD_ARM64_DT_OVERLAY=y \
-            ARCH=arm64 \
-            CROSS_COMPILE="$GCC" \
-            REAL_CC="$CLANG" \
-            CLANG_TRIPLE=aarch64-linux-gnu-
-
-      - name: Verify Image
-        run: |
-          IMAGE="$GITHUB_WORKSPACE/out/arch/arm64/boot/Image"
-
-          if [ ! -f "$IMAGE" ]; then
-            echo "ERROR: Image was not built."
-
-            echo ""
-            echo "Boot directory:"
-            ls -lah "$GITHUB_WORKSPACE/out/arch/arm64/boot" || true
-
-            exit 1
-          fi
-
-          echo "===== Kernel Image ====="
-          ls -lh "$IMAGE"
-
-          echo ""
-          file "$IMAGE"
-
-      - name: Copy Image
-        run: |
-          cp \
-            "$GITHUB_WORKSPACE/out/arch/arm64/boot/Image" \
-            "$GITHUB_WORKSPACE/arch/arm64/boot/Image"
-
-      - name: Upload kernel
-        uses: actions/upload-artifact@v4
-        with:
-          name: A70Q-Cartel-Kernel
-          path: |
-            arch/arm64/boot/Image
-            out/.config
