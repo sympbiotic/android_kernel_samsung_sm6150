@@ -11,12 +11,12 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout Cartel source
+      - name: Checkout kernel source
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Install build dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -32,42 +32,103 @@ jobs:
             curl \
             ccache
 
-      - name: Download Android GCC 4.9
+      - name: Prepare GCC directory
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64"
+          TOOLCHAIN="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"
 
-          git clone --depth=1 \
+          rm -rf "$TOOLCHAIN"
+
+          mkdir -p "$(dirname "$TOOLCHAIN")"
+
+          echo "GCC directory:"
+          echo "$TOOLCHAIN"
+
+      - name: Clone Android GCC 4.9
+        run: |
+          TOOLCHAIN="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"
+
+          git clone \
+            --depth=1 \
             https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 \
-            "$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"
+            "$TOOLCHAIN"
 
-      - name: Check GCC toolchain
+      - name: Verify GCC installation
         run: |
-          GCC="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin"
+          TOOLCHAIN="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"
 
-          test -x "$GCC/aarch64-linux-android-gcc"
-          test -x "$GCC/aarch64-linux-android-ld"
+          echo "===== GCC directory ====="
+          ls -la "$TOOLCHAIN"
 
-          "$GCC/aarch64-linux-android-gcc" --version
-          "$GCC/aarch64-linux-android-ld" --version
+          echo ""
+          echo "===== GCC bin directory ====="
+          ls -la "$TOOLCHAIN/bin"
 
-      - name: Check Cartel source
+          echo ""
+          echo "===== GCC compiler ====="
+
+          GCC="$TOOLCHAIN/bin/aarch64-linux-android-gcc"
+
+          if [ ! -f "$GCC" ]; then
+            echo "ERROR: GCC compiler was not found:"
+            echo "$GCC"
+            echo ""
+            echo "Searching for aarch64-linux-android-gcc..."
+            find "$TOOLCHAIN" -name "aarch64-linux-android-gcc" -type f -print
+            exit 1
+          fi
+
+          chmod +x "$GCC"
+
+          "$GCC" --version
+
+      - name: Check kernel source
         run: |
-          test -f arch/arm64/configs/a70q_eur_open_defconfig
-          test -x toolchain/llvm-arm-toolchain-ship/10.0/bin/clang
-          test -e tools/dtc
+          echo "===== Kernel source ====="
+          pwd
 
-          echo "A70Q defconfig found"
-          echo "Clang found"
-          echo "DTC found"
+          echo ""
+          echo "===== Defconfig ====="
 
-      - name: Prepare output
+          if [ ! -f "arch/arm64/configs/a70q_eur_open_defconfig" ]; then
+            echo "ERROR: a70q_eur_open_defconfig was not found."
+
+            echo ""
+            echo "Available A70Q configs:"
+            find arch/arm64/configs -type f \
+              \( -iname "*a70*" -o -iname "*q*" \) \
+              | sort
+
+            exit 1
+          fi
+
+          echo "Found:"
+          echo "arch/arm64/configs/a70q_eur_open_defconfig"
+
+      - name: Check Clang
+        run: |
+          CLANG="$GITHUB_WORKSPACE/toolchain/llvm-arm-toolchain-ship/10.0/bin/clang"
+
+          if [ ! -f "$CLANG" ]; then
+            echo "ERROR: Clang 10 was not found:"
+            echo "$CLANG"
+            exit 1
+          fi
+
+          chmod +x "$CLANG"
+
+          "$CLANG" --version
+
+      - name: Prepare build directory
         run: |
           rm -rf out
           mkdir -p out
 
-      - name: Configure kernel
+      - name: Generate kernel configuration
         run: |
-          GCC="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin/aarch64-linux-android-"
+          TOOLCHAIN="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"
+
+          GCC="$TOOLCHAIN/bin/aarch64-linux-android-"
+
           CLANG="$GITHUB_WORKSPACE/toolchain/llvm-arm-toolchain-ship/10.0/bin/clang"
 
           make -C "$GITHUB_WORKSPACE" \
@@ -80,13 +141,30 @@ jobs:
             CLANG_TRIPLE=aarch64-linux-gnu- \
             a70q_eur_open_defconfig
 
-      - name: Apply kernel configuration
+      - name: Disable forced module verification
         run: |
-          ./scripts/config --file out/.config \
-            --enable MODULES \
-            --enable MODULE_UNLOAD \
-            --disable MODULE_SIG_FORCE \
-            --disable SAMSUNG_TIMA
+          CONFIG="$GITHUB_WORKSPACE/out/.config"
+
+          if [ ! -f "$CONFIG" ]; then
+            echo "ERROR: out/.config was not generated."
+            exit 1
+          fi
+
+          sed -i '/^CONFIG_MODULE_SIG_FORCE=/d' "$CONFIG"
+          sed -i '/^# CONFIG_MODULE_SIG_FORCE is not set$/d' "$CONFIG"
+          echo "# CONFIG_MODULE_SIG_FORCE is not set" >> "$CONFIG"
+
+          sed -i '/^CONFIG_SAMSUNG_TIMA=/d' "$CONFIG"
+          sed -i '/^# CONFIG_SAMSUNG_TIMA is not set$/d' "$CONFIG"
+          echo "# CONFIG_SAMSUNG_TIMA is not set" >> "$CONFIG"
+
+          if ! grep -q '^CONFIG_MODULES=y' "$CONFIG"; then
+            echo "CONFIG_MODULES=y" >> "$CONFIG"
+          fi
+
+          if ! grep -q '^CONFIG_MODULE_UNLOAD=y' "$CONFIG"; then
+            echo "CONFIG_MODULE_UNLOAD=y" >> "$CONFIG"
+          fi
 
           make -C "$GITHUB_WORKSPACE" \
             O="$GITHUB_WORKSPACE/out" \
@@ -94,15 +172,18 @@ jobs:
             olddefconfig
 
           echo ""
-          echo "===== Kernel configuration ====="
+          echo "===== Final configuration ====="
+
           grep -E \
             'CONFIG_MODULES=|CONFIG_MODULE_UNLOAD=|CONFIG_MODULE_SIG_FORCE=|CONFIG_SAMSUNG_TIMA=' \
-            out/.config || true
-          echo "================================"
+            "$CONFIG" || true
 
       - name: Build kernel
         run: |
-          GCC="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin/aarch64-linux-android-"
+          TOOLCHAIN="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"
+
+          GCC="$TOOLCHAIN/bin/aarch64-linux-android-"
+
           CLANG="$GITHUB_WORKSPACE/toolchain/llvm-arm-toolchain-ship/10.0/bin/clang"
 
           make -j"$(nproc)" \
@@ -115,25 +196,34 @@ jobs:
             REAL_CC="$CLANG" \
             CLANG_TRIPLE=aarch64-linux-gnu-
 
-      - name: Verify kernel
+      - name: Verify kernel image
         run: |
-          echo "===== Kernel version ====="
-          make -C "$GITHUB_WORKSPACE" \
-            O="$GITHUB_WORKSPACE/out" \
-            kernelversion
+          IMAGE="$GITHUB_WORKSPACE/out/arch/arm64/boot/Image"
+
+          if [ ! -f "$IMAGE" ]; then
+            echo "ERROR: Kernel Image was not produced."
+
+            echo ""
+            echo "Contents of out/arch/arm64/boot:"
+            ls -lah "$GITHUB_WORKSPACE/out/arch/arm64/boot" || true
+
+            exit 1
+          fi
+
+          echo "===== Kernel ====="
+          ls -lh "$IMAGE"
 
           echo ""
-          echo "===== Kernel image ====="
-          ls -lh out/arch/arm64/boot/Image
-
-          file out/arch/arm64/boot/Image
+          echo "===== File information ====="
+          file "$IMAGE"
 
       - name: Copy kernel Image
         run: |
-          cp out/arch/arm64/boot/Image \
-             arch/arm64/boot/Image
+          cp \
+            "$GITHUB_WORKSPACE/out/arch/arm64/boot/Image" \
+            "$GITHUB_WORKSPACE/arch/arm64/boot/Image"
 
-      - name: Upload kernel artifact
+      - name: Upload kernel
         uses: actions/upload-artifact@v4
         with:
           name: A70Q-Cartel-Kernel
