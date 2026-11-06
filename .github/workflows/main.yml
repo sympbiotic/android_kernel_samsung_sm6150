@@ -30,16 +30,18 @@ jobs:
             python3 \
             git \
             curl \
+            wget \
+            xz-utils \
             ccache
 
-      - name: Prepare GCC directory
+      - name: Prepare GCC 4.9
         run: |
           TOOLCHAIN="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"
 
           rm -rf "$TOOLCHAIN"
           mkdir -p "$(dirname "$TOOLCHAIN")"
 
-      - name: Clone preserved GCC 4.9
+      - name: Download GCC 4.9
         run: |
           TOOLCHAIN="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"
 
@@ -53,39 +55,43 @@ jobs:
         run: |
           TOOLCHAIN="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"
 
-          echo "===== GCC root ====="
-          ls -lah "$TOOLCHAIN"
-
-          echo ""
-          echo "===== GCC bin ====="
-          ls -lah "$TOOLCHAIN/bin"
-
           GCC="$TOOLCHAIN/bin/aarch64-linux-android-gcc"
 
           if [ ! -f "$GCC" ]; then
-            echo "ERROR: GCC compiler not found:"
-            echo "$GCC"
-
-            echo ""
-            echo "Searching for compiler:"
-            find "$TOOLCHAIN" \
-              -type f \
-              -name "aarch64-linux-android-gcc" \
-              -print
-
+            echo "ERROR: GCC 4.9 not found."
+            find "$TOOLCHAIN" -name "aarch64-linux-android-gcc" -type f -print
             exit 1
           fi
 
           chmod +x "$GCC"
 
-          echo ""
-          echo "===== GCC version ====="
+          echo "===== GCC ====="
           "$GCC" --version
 
-      - name: Check kernel source
+      - name: Download Proton Clang
         run: |
-          echo "===== A70Q defconfig ====="
+          rm -rf "$GITHUB_WORKSPACE/proton-clang"
 
+          git clone \
+            --depth=1 \
+            https://github.com/kdrag0n/proton-clang.git \
+            "$GITHUB_WORKSPACE/proton-clang"
+
+      - name: Verify Proton Clang
+        run: |
+          PROTON="$GITHUB_WORKSPACE/proton-clang"
+
+          if [ ! -x "$PROTON/bin/clang" ]; then
+            echo "ERROR: Proton Clang was not found."
+            ls -lah "$PROTON"
+            exit 1
+          fi
+
+          echo "===== Proton Clang ====="
+          "$PROTON/bin/clang" --version
+
+      - name: Check A70Q defconfig
+        run: |
           if [ ! -f "arch/arm64/configs/a70q_defconfig" ]; then
             echo "ERROR: a70q_defconfig not found."
 
@@ -100,23 +106,7 @@ jobs:
             exit 1
           fi
 
-          echo "Found:"
-          echo "arch/arm64/configs/a70q_defconfig"
-
-      - name: Check Clang 10
-        run: |
-          CLANG="$GITHUB_WORKSPACE/toolchain/llvm-arm-toolchain-ship/10.0/bin/clang"
-
-          if [ ! -f "$CLANG" ]; then
-            echo "ERROR: Clang 10 not found:"
-            echo "$CLANG"
-            exit 1
-          fi
-
-          chmod +x "$CLANG"
-
-          echo "===== Clang ====="
-          "$CLANG" --version
+          echo "Found a70q_defconfig"
 
       - name: Check DTC
         run: |
@@ -135,3 +125,108 @@ jobs:
       - name: Generate A70Q defconfig
         run: |
           TOOLCHAIN="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"
+
+          GCC="$TOOLCHAIN/bin/aarch64-linux-android-"
+
+          PROTON="$GITHUB_WORKSPACE/proton-clang"
+
+          make -C "$GITHUB_WORKSPACE" \
+            O="$GITHUB_WORKSPACE/out" \
+            DTC_EXT="$GITHUB_WORKSPACE/tools/dtc" \
+            CONFIG_BUILD_ARM64_DT_OVERLAY=y \
+            ARCH=arm64 \
+            CROSS_COMPILE="$GCC" \
+            REAL_CC="$PROTON/bin/clang" \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            a70q_defconfig
+
+      - name: Configure kernel
+        run: |
+          CONFIG="$GITHUB_WORKSPACE/out/.config"
+
+          if [ ! -f "$CONFIG" ]; then
+            echo "ERROR: out/.config was not generated."
+            exit 1
+          fi
+
+          # Disable forced module signature verification
+          sed -i '/^CONFIG_MODULE_SIG_FORCE=/d' "$CONFIG"
+          sed -i '/^# CONFIG_MODULE_SIG_FORCE is not set$/d' "$CONFIG"
+          echo "# CONFIG_MODULE_SIG_FORCE is not set" >> "$CONFIG"
+
+          # Disable Samsung TIMA
+          sed -i '/^CONFIG_SAMSUNG_TIMA=/d' "$CONFIG"
+          sed -i '/^# CONFIG_SAMSUNG_TIMA is not set$/d' "$CONFIG"
+          echo "# CONFIG_SAMSUNG_TIMA is not set" >> "$CONFIG"
+
+          # Enable modules
+          sed -i '/^CONFIG_MODULES=/d' "$CONFIG"
+          echo "CONFIG_MODULES=y" >> "$CONFIG"
+
+          # Enable module unloading
+          sed -i '/^CONFIG_MODULE_UNLOAD=/d' "$CONFIG"
+          echo "CONFIG_MODULE_UNLOAD=y" >> "$CONFIG"
+
+          make -C "$GITHUB_WORKSPACE" \
+            O="$GITHUB_WORKSPACE/out" \
+            ARCH=arm64 \
+            olddefconfig
+
+          echo ""
+          echo "===== Final kernel configuration ====="
+
+          grep -E \
+            'CONFIG_MODULES=|CONFIG_MODULE_UNLOAD=|CONFIG_MODULE_SIG_FORCE=|CONFIG_SAMSUNG_TIMA=' \
+            "$CONFIG" || true
+
+      - name: Build kernel
+        run: |
+          TOOLCHAIN="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"
+
+          GCC="$TOOLCHAIN/bin/aarch64-linux-android-"
+
+          PROTON="$GITHUB_WORKSPACE/proton-clang"
+
+          make -j"$(nproc)" \
+            -C "$GITHUB_WORKSPACE" \
+            O="$GITHUB_WORKSPACE/out" \
+            DTC_EXT="$GITHUB_WORKSPACE/tools/dtc" \
+            CONFIG_BUILD_ARM64_DT_OVERLAY=y \
+            ARCH=arm64 \
+            CROSS_COMPILE="$GCC" \
+            REAL_CC="$PROTON/bin/clang" \
+            CLANG_TRIPLE=aarch64-linux-gnu-
+
+      - name: Verify kernel Image
+        run: |
+          IMAGE="$GITHUB_WORKSPACE/out/arch/arm64/boot/Image"
+
+          if [ ! -f "$IMAGE" ]; then
+            echo "ERROR: Kernel Image was not produced."
+
+            echo ""
+            echo "Boot directory:"
+            ls -lah "$GITHUB_WORKSPACE/out/arch/arm64/boot" || true
+
+            exit 1
+          fi
+
+          echo "===== Kernel Image ====="
+          ls -lh "$IMAGE"
+
+          echo ""
+          file "$IMAGE"
+
+      - name: Copy kernel Image
+        run: |
+          cp \
+            "$GITHUB_WORKSPACE/out/arch/arm64/boot/Image" \
+            "$GITHUB_WORKSPACE/arch/arm64/boot/Image"
+
+      - name: Upload kernel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: A70Q-Cartel-Kernel
+          path: |
+            arch/arm64/boot/Image
+            out/.config
