@@ -1,7 +1,7 @@
 name: A70Q Kernel Build
 
 on:
-  push:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -18,15 +18,14 @@ jobs:
           fetch-depth: 1
           submodules: true
 
-      - name: Install dependencies
+      - name: Install build dependencies
         run: |
           sudo apt-get update
+
           sudo apt-get install -y \
             bc \
             bison \
             build-essential \
-            ccache \
-            curl \
             flex \
             git \
             libelf-dev \
@@ -38,48 +37,87 @@ jobs:
             unzip \
             wget \
             xz-utils \
-            zip
+            zip \
+            gcc-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu \
+            gcc-arm-linux-gnueabi \
+            binutils-arm-linux-gnueabi
+
+      - name: Check toolchains
+        run: |
+          echo "AArch64 GCC:"
+          aarch64-linux-gnu-gcc --version
+
+          echo "AArch64 LD:"
+          aarch64-linux-gnu-ld --version
+
+          echo "ARM 32-bit GCC:"
+          arm-linux-gnueabi-gcc --version
+
+          echo "ARM 32-bit LD:"
+          arm-linux-gnueabi-ld --version
 
       - name: Show kernel version
         run: |
           echo "Kernel source version:"
           grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL|EXTRAVERSION)' Makefile
 
-      - name: Prepare build
+      - name: Prepare output directory
         run: |
+          rm -rf out
           mkdir -p out
 
-      - name: Build A70Q
+      - name: Configure A70Q
         run: |
           export ARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
 
-          make O=out a70q_defconfig
+          make \
+            O=out \
+            ARCH=arm64 \
+            CROSS_COMPILE="$CROSS_COMPILE" \
+            CROSS_COMPILE_COMPAT="$CROSS_COMPILE_COMPAT" \
+            a70q_defconfig
+
+      - name: Build kernel
+        run: |
+          export ARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
 
           make -j"$(nproc)" \
             O=out \
             ARCH=arm64 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            Image
+            CROSS_COMPILE="$CROSS_COMPILE" \
+            CROSS_COMPILE_COMPAT="$CROSS_COMPILE_COMPAT"
 
-      - name: Check kernel
+      - name: Check build output
         run: |
-          echo "Build output:"
-          ls -lh out/arch/arm64/boot/
+          echo "Kernel output:"
+          ls -lah out/arch/arm64/boot/
 
           test -f out/arch/arm64/boot/Image
 
-      - name: Package kernel
+      - name: Prepare artifact
         run: |
-          mkdir -p AnyKernel3
+          mkdir -p kernel-artifact
 
-          cp out/arch/arm64/boot/Image AnyKernel3/
+          cp out/arch/arm64/boot/Image \
+            kernel-artifact/Image
 
-          cd AnyKernel3
-          zip -r ../A70Q-4.14.190-kernel.zip .
+          cp out/.config \
+            kernel-artifact/config
+
+          cp out/include/config/kernel.release \
+            kernel-artifact/kernel.release
+
+          tar -czf A70Q-kernel-4.14.190.tar.gz \
+            -C kernel-artifact .
 
       - name: Upload kernel
         uses: actions/upload-artifact@v4
         with:
-          name: A70Q-4.14.190-kernel
-          path: A70Q-4.14.190-kernel.zip
+          name: A70Q-kernel-4.14.190
+          path: A70Q-kernel-4.14.190.tar.gz
           retention-days: 7
