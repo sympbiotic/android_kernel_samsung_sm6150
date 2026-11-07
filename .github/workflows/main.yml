@@ -1,7 +1,7 @@
 name: A70Q Kernel Build
 
 on:
-  workflow_dispatch:
+  push:
 
 permissions:
   contents: read
