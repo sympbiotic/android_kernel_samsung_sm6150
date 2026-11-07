@@ -1,655 +1,85 @@
-name: A70Q Cartel Kernel Build
+name: A70Q Kernel Build
 
 on:
-  push:
-    branches:
-      - lineage-22.1
-  workflow_dispatch:
+  action:
+
+permissions:
+  contents: read
 
 jobs:
   build:
+    name: Build A70Q Kernel
     runs-on: ubuntu-22.04
 
     steps:
-
-      # ============================================================
-      # SOURCE
-      # ============================================================
-
-      - name: Checkout kernel source
+      - name: Checkout source
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-
-      # ============================================================
-      # DEPENDENCIES
-      # ============================================================
+          submodules: true
 
       - name: Install dependencies
         run: |
           sudo apt-get update
-
           sudo apt-get install -y \
             bc \
             bison \
-            flex \
             build-essential \
-            libssl-dev \
+            ccache \
+            curl \
+            flex \
+            git \
             libelf-dev \
             libncurses5-dev \
+            libssl-dev \
+            lz4 \
             python3 \
-            python3-pip \
-            git \
-            curl \
+            rsync \
+            unzip \
             wget \
             xz-utils \
-            cpio \
-            zip \
-            unzip \
-            file \
-            gcc-arm-linux-gnueabi \
-            binutils-arm-linux-gnueabi
+            zip
 
-      # ============================================================
-      # GCC 4.9
-      # ============================================================
-
-      - name: Prepare GCC 4.9 directory
+      - name: Show kernel version
         run: |
-          TOOLCHAIN="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"
+          echo "Kernel source version:"
+          grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL|EXTRAVERSION)' Makefile
 
-          rm -rf "$TOOLCHAIN"
-
-          mkdir -p "$(dirname "$TOOLCHAIN")"
-
-      - name: Download GCC 4.9
+      - name: Prepare build
         run: |
-          TOOLCHAIN="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"
+          mkdir -p out
 
-          git clone \
-            --depth=1 \
-            --branch android11-release \
-            https://gitlab.com/pixelrom/kernel/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9.git \
-            "$TOOLCHAIN"
-
-      - name: Verify AArch64 GCC
+      - name: Build A70Q
         run: |
-          TOOLCHAIN="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"
+          export ARCH=arm64
 
-          GCC="$TOOLCHAIN/bin/aarch64-linux-android-gcc"
-
-          if [ ! -x "$GCC" ]; then
-            echo "ERROR: AArch64 GCC was not found."
-
-            find "$TOOLCHAIN" \
-              -name "aarch64-linux-android-gcc" \
-              -type f \
-              -print
-
-            exit 1
-          fi
-
-          echo "===== AArch64 GCC ====="
-          "$GCC" --version
-
-      # ============================================================
-      # ARM32 COMPILER
-      # ============================================================
-
-      - name: Verify ARM32 compatibility compiler
-        run: |
-          echo "===== ARM32 GCC ====="
-
-          which arm-linux-gnueabi-gcc
-          arm-linux-gnueabi-gcc --version
-
-          which arm-linux-gnueabi-ld
-          arm-linux-gnueabi-ld --version
-
-      # ============================================================
-      # PROTON CLANG
-      # ============================================================
-
-      - name: Download Proton Clang
-        run: |
-          rm -rf "$GITHUB_WORKSPACE/proton-clang"
-
-          git clone \
-            --depth=1 \
-            https://github.com/kdrag0n/proton-clang.git \
-            "$GITHUB_WORKSPACE/proton-clang"
-
-      - name: Verify Proton Clang
-        run: |
-          PROTON="$GITHUB_WORKSPACE/proton-clang"
-
-          if [ ! -x "$PROTON/bin/clang" ]; then
-            echo "ERROR: Proton Clang was not found."
-            exit 1
-          fi
-
-          echo "===== Proton Clang ====="
-          "$PROTON/bin/clang" --version
-
-          echo ""
-          echo "===== Test stack protector ====="
-
-          echo 'int main(void) { return 0; }' > /tmp/test.c
-
-          "$PROTON/bin/clang" \
-            -target aarch64-linux-android \
-            -fstack-protector-strong \
-            -c /tmp/test.c \
-            -o /tmp/test.o
-
-          echo "Clang accepts -fstack-protector-strong"
-
-      # ============================================================
-      # SOURCE CHECKS
-      # ============================================================
-
-      - name: Check A70Q defconfig
-        run: |
-          if [ ! -f "arch/arm64/configs/a70q_defconfig" ]; then
-            echo "ERROR: a70q_defconfig was not found."
-
-            echo ""
-            echo "Available A70 configs:"
-
-            find arch/arm64/configs \
-              -maxdepth 1 \
-              -type f \
-              -iname "*a70*" \
-              | sort
-
-            exit 1
-          fi
-
-          echo "Found:"
-          echo "arch/arm64/configs/a70q_defconfig"
-
-      - name: Check DTC
-        run: |
-          if [ ! -e "$GITHUB_WORKSPACE/tools/dtc" ]; then
-            echo "ERROR: tools/dtc was not found."
-            exit 1
-          fi
-
-          echo "DTC found."
-
-      # ============================================================
-      # CLEAN BUILD DIRECTORY
-      # ============================================================
-
-      - name: Clean build output
-        run: |
-          rm -rf "$GITHUB_WORKSPACE/out"
-          rm -rf "$GITHUB_WORKSPACE/AnyKernel3"
-
-          mkdir -p "$GITHUB_WORKSPACE/out"
-
-          echo "Clean build directory created."
-
-      # ============================================================
-      # DEFCONFIG
-      # ============================================================
-
-      - name: Generate A70Q defconfig
-        run: |
-          TOOLCHAIN="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"
-
-          GCC="$TOOLCHAIN/bin/aarch64-linux-android-"
-
-          COMPAT="/usr/bin/arm-linux-gnueabi-"
-
-          PROTON="$GITHUB_WORKSPACE/proton-clang"
-
-          make -C "$GITHUB_WORKSPACE" \
-            O="$GITHUB_WORKSPACE/out" \
-            ARCH=arm64 \
-            CROSS_COMPILE="$GCC" \
-            CROSS_COMPILE_COMPAT="$COMPAT" \
-            CC="$PROTON/bin/clang" \
-            REAL_CC="$PROTON/bin/clang" \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
-            DTC_EXT="$GITHUB_WORKSPACE/tools/dtc" \
-            CONFIG_BUILD_ARM64_DT_OVERLAY=y \
-            a70q_defconfig
-
-      # ============================================================
-      # CONFIGURATION
-      # ============================================================
-
-      - name: Configure kernel
-        run: |
-          CONFIG="$GITHUB_WORKSPACE/out/.config"
-
-          if [ ! -f "$CONFIG" ]; then
-            echo "ERROR: out/.config was not generated."
-            exit 1
-          fi
-
-          # Disable forced module signature verification
-          sed -i '/^CONFIG_MODULE_SIG_FORCE=/d' "$CONFIG"
-          sed -i '/^# CONFIG_MODULE_SIG_FORCE is not set$/d' "$CONFIG"
-          echo "# CONFIG_MODULE_SIG_FORCE is not set" >> "$CONFIG"
-
-          # Disable Samsung TIMA
-          sed -i '/^CONFIG_SAMSUNG_TIMA=/d' "$CONFIG"
-          sed -i '/^# CONFIG_SAMSUNG_TIMA is not set$/d' "$CONFIG"
-          echo "# CONFIG_SAMSUNG_TIMA is not set" >> "$CONFIG"
-
-          # Modules
-          sed -i '/^CONFIG_MODULES=/d' "$CONFIG"
-          echo "CONFIG_MODULES=y" >> "$CONFIG"
-
-          sed -i '/^CONFIG_MODULE_UNLOAD=/d' "$CONFIG"
-          echo "CONFIG_MODULE_UNLOAD=y" >> "$CONFIG"
-
-          TOOLCHAIN="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"
-
-          GCC="$TOOLCHAIN/bin/aarch64-linux-android-"
-
-          COMPAT="/usr/bin/arm-linux-gnueabi-"
-
-          PROTON="$GITHUB_WORKSPACE/proton-clang"
-
-          make -C "$GITHUB_WORKSPACE" \
-            O="$GITHUB_WORKSPACE/out" \
-            ARCH=arm64 \
-            CROSS_COMPILE="$GCC" \
-            CROSS_COMPILE_COMPAT="$COMPAT" \
-            CC="$PROTON/bin/clang" \
-            REAL_CC="$PROTON/bin/clang" \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
-            olddefconfig
-
-          echo ""
-          echo "===== FINAL CONFIG ====="
-
-          grep -E \
-            'CONFIG_MODULES=|CONFIG_MODULE_UNLOAD=|CONFIG_MODULE_SIG_FORCE=|CONFIG_SAMSUNG_TIMA=|CONFIG_CC_STACKPROTECTOR_' \
-            "$CONFIG" || true
-
-      # ============================================================
-      # BUILD KERNEL
-      # ============================================================
-
-      - name: Build kernel
-        run: |
-          set -e
-
-          TOOLCHAIN="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"
-
-          GCC="$TOOLCHAIN/bin/aarch64-linux-android-"
-
-          COMPAT="/usr/bin/arm-linux-gnueabi-"
-
-          PROTON="$GITHUB_WORKSPACE/proton-clang"
+          make O=out a70q_defconfig
 
           make -j"$(nproc)" \
-            -C "$GITHUB_WORKSPACE" \
-            O="$GITHUB_WORKSPACE/out" \
+            O=out \
             ARCH=arm64 \
-            CROSS_COMPILE="$GCC" \
-            CROSS_COMPILE_COMPAT="$COMPAT" \
-            CC="$PROTON/bin/clang" \
-            REAL_CC="$PROTON/bin/clang" \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
-            DTC_EXT="$GITHUB_WORKSPACE/tools/dtc" \
-            CONFIG_BUILD_ARM64_DT_OVERLAY=y
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            Image
 
-      # ============================================================
-      # BUILD DTBS
-      # ============================================================
-
-      - name: Build device trees
+      - name: Check kernel
         run: |
-          set -e
+          echo "Build output:"
+          ls -lh out/arch/arm64/boot/
 
-          TOOLCHAIN="$GITHUB_WORKSPACE/../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"
+          test -f out/arch/arm64/boot/Image
 
-          GCC="$TOOLCHAIN/bin/aarch64-linux-android-"
-
-          COMPAT="/usr/bin/arm-linux-gnueabi-"
-
-          PROTON="$GITHUB_WORKSPACE/proton-clang"
-
-          make -j"$(nproc)" \
-            -C "$GITHUB_WORKSPACE" \
-            O="$GITHUB_WORKSPACE/out" \
-            ARCH=arm64 \
-            CROSS_COMPILE="$GCC" \
-            CROSS_COMPILE_COMPAT="$COMPAT" \
-            CC="$PROTON/bin/clang" \
-            REAL_CC="$PROTON/bin/clang" \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
-            DTC_EXT="$GITHUB_WORKSPACE/tools/dtc" \
-            CONFIG_BUILD_ARM64_DT_OVERLAY=y \
-            dtbs
-
-      # ============================================================
-      # SHOW ALL DTB / DTBO FILES
-      # ============================================================
-
-      - name: Inspect DTB and DTBO output
+      - name: Package kernel
         run: |
-          echo "===== ALL DTB FILES ====="
+          mkdir -p AnyKernel3
 
-          find "$GITHUB_WORKSPACE/out" \
-            -type f \
-            \( -name "*.dtb" -o -name "*.dtbo" \) \
-            -print \
-            | sort
+          cp out/arch/arm64/boot/Image AnyKernel3/
 
-          echo ""
-          echo "===== POSSIBLE DTBO FILES ====="
+          cd AnyKernel3
+          zip -r ../A70Q-4.14.190-kernel.zip .
 
-          find "$GITHUB_WORKSPACE/out" \
-            -type f \
-            \( \
-              -iname "*dtbo*" \
-              -o -iname "dtbo.img" \
-              -o -iname "*.dtbo" \
-            \) \
-            -print \
-            | sort || true
-
-          echo ""
-          echo "===== POSSIBLE DTBO CONFIG/SOURCES ====="
-
-          find "$GITHUB_WORKSPACE" \
-            -type f \
-            \( \
-              -name "dtboimg.cfg" \
-              -o -name "*dtbo*.cfg" \
-              -o -name "*.dtbo" \
-            \) \
-            -not -path "*/out/*" \
-            -print \
-            | sort || true
-
-      # ============================================================
-      # FIND KERNEL IMAGE
-      # ============================================================
-
-      - name: Prepare kernel image
-        run: |
-          set -e
-
-          BOOT="$GITHUB_WORKSPACE/out/arch/arm64/boot"
-
-          if [ ! -f "$BOOT/Image" ]; then
-            echo "ERROR: Image was not produced."
-
-            find "$BOOT" \
-              -maxdepth 3 \
-              -type f \
-              -print \
-              | sort
-
-            exit 1
-          fi
-
-          echo "Found Image:"
-          ls -lh "$BOOT/Image"
-
-          # A70Q/SM6150 device configurations commonly expect
-          # Image.gz rather than raw Image.
-          gzip -9 -c "$BOOT/Image" > "$BOOT/Image.gz"
-
-          if [ ! -s "$BOOT/Image.gz" ]; then
-            echo "ERROR: Image.gz was not produced."
-            exit 1
-          fi
-
-          echo ""
-          echo "===== KERNEL IMAGES ====="
-
-          ls -lh \
-            "$BOOT/Image" \
-            "$BOOT/Image.gz"
-
-      # ============================================================
-      # VERIFY A70Q DTB
-      # ============================================================
-
-      - name: Verify A70Q DTB
-        run: |
-          set -e
-
-          DTB="$GITHUB_WORKSPACE/out/arch/arm64/boot/dts/qcom/sm6150.dtb"
-
-          if [ ! -f "$DTB" ]; then
-            echo "ERROR: Expected sm6150.dtb was not produced."
-
-            echo ""
-            echo "Available DTBs:"
-
-            find "$GITHUB_WORKSPACE/out" \
-              -type f \
-              -name "*.dtb" \
-              -print \
-              | sort
-
-            exit 1
-          fi
-
-          echo "===== A70Q DTB ====="
-          ls -lh "$DTB"
-
-      # ============================================================
-      # DTBO
-      # ============================================================
-
-      - name: Locate DTBO image
-        run: |
-          set -e
-
-          OUT="$GITHUB_WORKSPACE/out"
-
-          echo "Searching for generated dtbo.img..."
-
-          DTBO="$(find "$OUT" \
-            -type f \
-            -name "dtbo.img" \
-            -print \
-            | head -n 1)"
-
-          if [ -n "$DTBO" ]; then
-            echo "Found DTBO image:"
-            echo "$DTBO"
-
-            cp "$DTBO" "$GITHUB_WORKSPACE/out/dtbo.img"
-
-            exit 0
-          fi
-
-          echo ""
-          echo "No dtbo.img was generated by the kernel build."
-
-          echo ""
-          echo "Searching for .dtbo files..."
-
-          DTBO_FILES="$(find "$OUT" \
-            -type f \
-            -name "*.dtbo" \
-            -print \
-            | sort)"
-
-          if [ -n "$DTBO_FILES" ]; then
-            echo "$DTBO_FILES"
-          else
-            echo "No .dtbo files were generated either."
-          fi
-
-          echo ""
-          echo "This workflow will NOT create a fake dtbo.img."
-
-          echo "ERROR: A separate DTBO image is required for the final package."
-          exit 1
-
-      # ============================================================
-      # VERIFY EVERYTHING BEFORE AK3
-      # ============================================================
-
-      - name: Verify final kernel components
-        run: |
-          set -e
-
-          test -s "$GITHUB_WORKSPACE/out/arch/arm64/boot/Image"
-          test -s "$GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz"
-          test -s "$GITHUB_WORKSPACE/out/arch/arm64/boot/dts/qcom/sm6150.dtb"
-          test -s "$GITHUB_WORKSPACE/out/dtbo.img"
-
-          echo "===== REQUIRED COMPONENTS ====="
-
-          echo ""
-          echo "Image:"
-          ls -lh "$GITHUB_WORKSPACE/out/arch/arm64/boot/Image"
-
-          echo ""
-          echo "Image.gz:"
-          ls -lh "$GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz"
-
-          echo ""
-          echo "DTB:"
-          ls -lh "$GITHUB_WORKSPACE/out/arch/arm64/boot/dts/qcom/sm6150.dtb"
-
-          echo ""
-          echo "DTBO:"
-          ls -lh "$GITHUB_WORKSPACE/out/dtbo.img"
-
-      # ============================================================
-      # ANYKERNEL3
-      # ============================================================
-
-      - name: Download AnyKernel3
-        run: |
-          set -e
-
-          rm -rf "$GITHUB_WORKSPACE/AnyKernel3"
-
-          git clone \
-            --depth=1 \
-            https://github.com/KernelSU-Next/AnyKernel3.git \
-            "$GITHUB_WORKSPACE/AnyKernel3"
-
-      # ============================================================
-      # PREPARE AK3
-      # ============================================================
-
-      - name: Prepare AnyKernel3
-        run: |
-          set -e
-
-          AK3="$GITHUB_WORKSPACE/AnyKernel3"
-
-          IMAGE="$GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz"
-
-          DTB="$GITHUB_WORKSPACE/out/arch/arm64/boot/dts/qcom/sm6150.dtb"
-
-          DTBO="$GITHUB_WORKSPACE/out/dtbo.img"
-
-          test -s "$IMAGE"
-          test -s "$DTB"
-          test -s "$DTBO"
-
-          echo "===== AnyKernel3 source ====="
-          ls -lah "$AK3"
-
-          echo ""
-          echo "===== Copying kernel ====="
-
-          cp "$IMAGE" "$AK3/Image.gz"
-
-          echo ""
-          echo "===== Copying DTB ====="
-
-          cp "$DTB" "$AK3/dtb"
-
-          echo ""
-          echo "===== Copying DTBO ====="
-
-          cp "$DTBO" "$AK3/dtbo.img"
-
-          echo ""
-          echo "===== AK3 KERNEL FILES ====="
-
-          ls -lh \
-            "$AK3/Image.gz" \
-            "$AK3/dtb" \
-            "$AK3/dtbo.img"
-
-      # ============================================================
-      # REMOVE GIT METADATA
-      # ============================================================
-
-      - name: Clean AnyKernel3 metadata
-        run: |
-          rm -rf "$GITHUB_WORKSPACE/AnyKernel3/.git"
-
-      # ============================================================
-      # CREATE ZIP
-      # ============================================================
-
-      - name: Create A70Q Cartel Kernel ZIP
-        run: |
-          set -e
-
-          cd "$GITHUB_WORKSPACE/AnyKernel3"
-
-          rm -f "$GITHUB_WORKSPACE/A70Q-Cartel-Kernel.zip"
-
-          zip -r9 \
-            "$GITHUB_WORKSPACE/A70Q-Cartel-Kernel.zip" \
-            . \
-            -x "*.git*" \
-            -x "README.md"
-
-          echo ""
-          echo "===== FINAL ZIP ====="
-
-          ls -lh "$GITHUB_WORKSPACE/A70Q-Cartel-Kernel.zip"
-
-      # ============================================================
-      # VERIFY ZIP
-      # ============================================================
-
-      - name: Verify final ZIP contents
-        run: |
-          set -e
-
-          ZIP="$GITHUB_WORKSPACE/A70Q-Cartel-Kernel.zip"
-
-          echo "===== ZIP CONTENTS ====="
-
-          unzip -l "$ZIP"
-
-          echo ""
-          echo "===== REQUIRED FILE CHECK ====="
-
-          unzip -l "$ZIP" | grep -E \
-            'Image\.gz|dtb|dtbo\.img|anykernel\.sh|META-INF' \
-            || true
-
-          echo ""
-          echo "===== ZIP TEST ====="
-
-          unzip -t "$ZIP"
-
-      # ============================================================
-      # UPLOAD ARTIFACTS
-      # ============================================================
-
-      - name: Upload flashable kernel ZIP
+      - name: Upload kernel
         uses: actions/upload-artifact@v4
         with:
-          name: A70Q-Cartel-Kernel-ZIP
-          path: |
-            A70Q-Cartel-Kernel.zip
-            out/.config
-            out/dtbo.img
-            out/arch/arm64/boot/Image
-            out/arch/arm64/boot/Image.gz
-            out/arch/arm64/boot/dts/qcom/sm6150.dtb
+          name: A70Q-4.14.190-kernel
+          path: A70Q-4.14.190-kernel.zip
+          retention-days: 7
