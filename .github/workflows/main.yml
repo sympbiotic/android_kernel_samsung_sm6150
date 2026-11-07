@@ -1,7 +1,7 @@
 name: A70Q Kernel Build
 
 on:
-  action:
+  push:
 
 permissions:
   contents: read
